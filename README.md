@@ -319,7 +319,7 @@ START → plan → agent_step ──┬── tools ──┐
   the model to diagnose from the traceback, change only what is broken, not restart from
   scratch, and not re-run identical code. Control then flows back to `agent_step` on the
   ordinary edge, so recovery is a normal iteration and shows up as one in the metrics.
-- **Budget**: `AGENT_MAX_ITERATIONS`, default 8, counted per `tools` visit.
+- **Budget**: `AGENT_MAX_ITERATIONS`, default 16, counted per `tools` visit.
   `recursion_limit = budget * 3 + 12`. When the budget is spent, `summarize` appends a
   "you have reached your step budget" turn and makes one final tool-free call, so a run
   always ends with a written summary rather than a truncation.
@@ -754,9 +754,7 @@ Every claim here is checked by `scripts/verify_stack.sh` against the running sta
 ## Running the tests
 
 ```bash
-# Unit tests: 277 passing + 2 xfailed, no services needed. Uses the backend virtualenv.
-# The two xfails pin a known defect (see Known limitations) and are strict, so they turn
-# into failures the moment it is fixed.
+# Unit tests: 279 passing, no services needed. Uses the backend virtualenv.
 cd backend
 python -m venv .venv && .venv/Scripts/pip install -e ".[dev]"   # POSIX: .venv/bin/pip
 .venv/Scripts/python -m pytest tests/unit -q
@@ -808,8 +806,10 @@ What the suite actually pins, beyond the obvious:
   comparison would be measuring nothing, and the build should fail.
 - **Phantom determinism and resolution independence** — the same seed must produce the same
   volumes, and the bias field's shape must not change with `--size`.
-- **A known, unfixed defect** — `test_slice_head_probe.py` is `xfail(strict=True)`, so the
-  build breaks when the bug is fixed and the marker must be removed with it.
+- **The slice HEAD contract** — `test_slice_head_probe.py` asserts the slice routes accept the
+  HEAD probe the viewer actually sends. It began life as a strict `xfail` pinning the defect
+  described below, and turned into a failing test the moment the routes were fixed, which is
+  what forced it to become a real assertion rather than a memorial to a solved bug.
 
 And, honestly, what the suite does **not** pin: nothing exercises the browser's own request
 methods, which is why the slice-navigation defect above survived a green suite and was only
@@ -992,9 +992,12 @@ it was "did the agent get to `save_artifact` before the budget ran out".
 
 That is a finding about **this configuration**, and it is actionable:
 
-1. **`AGENT_MAX_ITERATIONS=8` is too small for this task on this model.** All four runs hit
+1. **`AGENT_MAX_ITERATIONS=8` was too small for this task on this model.** All four runs hit
    it. Every one of them spent 4–6 iterations on exploration scripts before writing the real
-   analysis. It is an environment variable; 16–20 is the obvious next experiment.
+   analysis. The default is now **16**, and the shared preamble tells the agent to save a
+   working result early and improve it rather than saving once at the end. Both changes
+   reach both arms identically — they repair the measuring instrument, they do not favour a
+   side, and the trigger for changing them was that *both* arms failed the same way.
 2. **The prompt does not make deliverable registration a terminal obligation.** Both arms
    treated "write the analysis" as the goal and "register the outputs" as a follow-up step,
    and the budget ended in between. A `finalize` node that forces one last
@@ -1132,31 +1135,33 @@ Stated honestly, including the uncomfortable ones.
   **−0.006**. OpenRouter provides no reproducibility guarantee for this model and
   `temperature=0` is not one either. A rigorous claim needs repeated trials with confidence
   intervals. This is the single biggest scientific weakness of the current setup.
-- **The default iteration budget of 8 is too small for this task on this model, and it is
-  currently the dominant variable.** All four runs across both trials exhausted it, and
-  three of the four ended with the agent describing deliverables it had not written. Until
-  that is fixed, the A/B comparison measures "did the arm reach `save_artifact` in time"
-  more than it measures "did the skill help". It is a one-line change
-  (`AGENT_MAX_ITERATIONS`), but the honest thing is to report what the shipped default
-  actually produced rather than to quietly retune it and re-run until the graph looks good.
+- **The iteration budget was the dominant variable in the two recorded trials, and those
+  trials should be read with that in mind.** They ran with `AGENT_MAX_ITERATIONS=8`; all four
+  runs exhausted it and three ended with the agent describing deliverables it had never
+  written, so the comparison largely measured "did this arm reach `save_artifact` in time"
+  rather than "did the skill help". The default is now 16 and agents are told where outputs
+  must be written to survive, but the two trials below are reported **as they were run**,
+  under the old budget, rather than quietly re-run until the graph looked better. The
+  distinction that justified changing it at all: both arms failed in the same way, so this is
+  a broken instrument, not a losing result.
 - **Nothing forces a final write-and-register pass.** The analysis graph's `summarize` node
   asks for a written summary when the budget is spent, but it does not give the agent one
   last chance to persist its outputs. A `finalize` node that does — identically for both
   arms, so the fairness contract holds — would remove the failure mode above.
-- **Slice navigation is stuck at one slice in the browser.** `hooks/useSliceCount.ts` reads
-  the `X-Slice-Count` header with `fetch(url, {method: "HEAD"})`, but FastAPI 0.115 registers
-  every `@router.get` route as `GET` only and does not synthesise a `HEAD` handler the way
-  bare Starlette does. Every such request returns **405**, the hook's `.catch()` swallows it,
-  and the count silently falls back to `1` — so the axis tabs and the alpha slider work, but
-  the scrubber has nothing to scrub. The rendering endpoints themselves are fine: a direct
-  `GET .../slice?axis=coronal&index=32` returns a correct PNG with `X-Slice-Count: 64` on all
-  three axes, and `/overlay?alpha=0.55` returns a correct RGBA mask. This was found by
-  probing the live API rather than by any test, because nothing in the suite exercises the
-  browser's request method. The fix is one line on either side — issue the probe as a `GET`,
-  or add `methods=["GET", "HEAD"]` to the two slice routes — plus a test that asserts the
-  header arrives by whichever method the client actually uses. It is pinned by
-  `backend/tests/unit/test_slice_head_probe.py`, an `xfail(strict=True)` that will fail the
-  build the moment the mismatch is fixed, so the marker cannot outlive the bug.
+- **Slice navigation was stuck at one slice in the browser — since fixed, but worth recording
+  because of how it hid.** `hooks/useSliceCount.ts` reads the `X-Slice-Count` header with
+  `fetch(url, {method: "HEAD"})`, but FastAPI registers every `@router.get` route as `GET`
+  only and does not synthesise a `HEAD` handler the way bare Starlette does. Every probe
+  returned **405**, the hook's `.catch()` swallowed it, and the count fell back to `1` — so
+  the axis tabs and the alpha slider worked and the failure looked like a volume that
+  happened to have a single slice, rather than a rejected request. The rendering endpoints
+  were correct throughout: `GET .../slice?axis=coronal&index=32` returned a valid PNG with
+  `X-Slice-Count: 64` on all three axes. The two slice routes now declare
+  `methods=["GET", "HEAD"]`; `HEAD` is the right verb, since the probe wants a header rather
+  than a PNG, and Starlette drops the body. The lasting lesson is that the entire suite was
+  green while a headline feature did nothing, because nothing exercised the request method
+  the browser actually uses — a contract between two layers that each unit test, in
+  isolation, was happy with.
 - **Three high-severity transitive npm advisories remain**, in `postcss` and `sharp` inside
   Next 15. A critical advisory plus two highs were already cleared by pinning `next` to
   15.5.23. The remaining three are only fixable by moving to Next 16, a semver-major change
