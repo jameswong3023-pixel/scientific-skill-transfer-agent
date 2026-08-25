@@ -111,6 +111,20 @@ services:
       sandbox: {condition: service_healthy}
     networks: [core, sandboxnet]
 
+  frontend:
+    build:
+      context: ./frontend
+    environment:
+      # Server Components fetch over the compose network; the browser uses
+      # same-origin relative paths so the SSE rewrite in next.config.ts holds.
+      API_ORIGIN: http://api:8000
+      NODE_ENV: production
+    ports:
+      - "3000:3000"
+    depends_on:
+      api: {condition: service_started}
+    networks: [edge]
+
 volumes:
   pgdata:
   redisdata:
