@@ -190,6 +190,7 @@ async def execute_run(
     max_iterations: int | None = None,
 ) -> dict:
     from app.agents.analysis.graph import run_analysis
+    from app.agents.checkpointing import analysis_checkpointer
 
     started = time.perf_counter()
     emit = RunEventEmitter(
@@ -231,16 +232,23 @@ async def execute_run(
             {"files": [f.path for f in manifest.files]},
         )
 
-        result = await run_analysis(
-            run_id=str(run_id),
-            arm=arm,
-            task=task,
-            manifest_block=manifest.as_prompt_block(),
-            skill=skill,
-            sandbox=sandbox_client,
-            emit=emit,
-            max_iterations=max_iterations,
-        )
+        # Both arms are checkpointed identically; the checkpointer is not part
+        # of what differs between them. It yields None if Postgres is
+        # unreachable, in which case the run proceeds without persistence
+        # rather than failing.
+        async with analysis_checkpointer() as checkpointer:
+            result = await run_analysis(
+                run_id=str(run_id),
+                arm=arm,
+                task=task,
+                manifest_block=manifest.as_prompt_block(),
+                skill=skill,
+                sandbox=sandbox_client,
+                emit=emit,
+                max_iterations=max_iterations,
+                checkpointer=checkpointer,
+                thread_id=str(run_id),
+            )
 
         duration = time.perf_counter() - started
 

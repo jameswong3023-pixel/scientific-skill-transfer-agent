@@ -66,7 +66,12 @@ def _dumps(obj: Any) -> str:
         return str(obj)
 
 
-def build_analysis_graph(client=None, emit: Emitter | None = None, ctx: ToolContext | None = None):
+def build_analysis_graph(
+    client=None,
+    emit: Emitter | None = None,
+    ctx: ToolContext | None = None,
+    checkpointer=None,
+):
     client = client or llm
     emit = emit or _noop_emit
 
@@ -205,7 +210,11 @@ def build_analysis_graph(client=None, emit: Emitter | None = None, ctx: ToolCont
     graph.add_edge("tools", "agent_step")
     graph.add_edge("summarize", END)
 
-    return graph.compile()
+    # A checkpointer persists graph state at every super-step, keyed by the
+    # run's thread id, so an interrupted run leaves an inspectable trail rather
+    # than vanishing with the process. Optional by design: compile() with
+    # checkpointer=None is the plain in-memory behaviour.
+    return graph.compile(checkpointer=checkpointer)
 
 
 async def run_analysis(
@@ -218,14 +227,28 @@ async def run_analysis(
     client=None,
     emit: Emitter | None = None,
     max_iterations: int | None = None,
+    checkpointer=None,
+    thread_id: str | None = None,
 ) -> dict[str, Any]:
     emit = emit or _noop_emit
     ctx = ToolContext(
         run_id=str(run_id), sandbox=sandbox or sandbox_client, emit=emit
     )
-    graph = build_analysis_graph(client=client, emit=emit, ctx=ctx)
+    graph = build_analysis_graph(
+        client=client, emit=emit, ctx=ctx, checkpointer=checkpointer
+    )
 
     budget = max_iterations or settings.agent_max_iterations
+    config: dict[str, Any] = {
+        # Each iteration costs two node visits (agent_step + tools); pad generously.
+        "recursion_limit": budget * 3 + 12
+    }
+    if checkpointer is not None:
+        # LangGraph requires a thread id whenever a checkpointer is attached;
+        # keying it to the run makes the persisted state directly joinable to
+        # the runs table via Run.thread_id.
+        config["configurable"] = {"thread_id": str(thread_id or run_id)}
+
     final = await graph.ainvoke(
         {
             "run_id": str(run_id),
@@ -238,8 +261,7 @@ async def run_analysis(
             "usage": {},
             "error": None,
         },
-        # Each iteration costs two node visits (agent_step + tools); pad generously.
-        {"recursion_limit": budget * 3 + 12},
+        config,
     )
 
     return {
