@@ -1,0 +1,16 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+numpy==2.2.1
+scipy==1.15.0
+scikit-image==0.25.0
+scikit-learn==1.6.0
+opencv-python-headless==4.10.0.84
+nibabel==5.3.2
+SimpleITK==2.4.1
+pydicom==3.0.1
+tifffile==2025.1.10
+imagecodecs==2024.12.30
+pandas==2.2.3
+matplotlib==3.10.0
+Pillow==11.1.0

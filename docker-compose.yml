@@ -62,6 +62,27 @@ services:
       retries: 20
     networks: [core, edge]
 
+  sandbox:
+    build:
+      context: ./sandbox
+    # Deliberately NO environment anchor: this container must never see
+    # OPENROUTER_API_KEY, database credentials, or S3 credentials.
+    environment:
+      SANDBOX_WORK_ROOT: /work
+      SANDBOX_MAX_TIMEOUT_S: "900"
+      SANDBOX_MEMORY_MB: "3072"
+    user: "1000:1000"
+    volumes:
+      - sandboxwork:/work
+    tmpfs:
+      - /tmp:size=512m
+    networks: [sandboxnet]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   api:
     build:
       context: ./backend
@@ -75,6 +96,7 @@ services:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
       minio: {condition: service_healthy}
+      sandbox: {condition: service_healthy}
     networks: [core, edge, sandboxnet]
 
   worker:
@@ -86,12 +108,14 @@ services:
       api: {condition: service_started}
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
+      sandbox: {condition: service_healthy}
     networks: [core, sandboxnet]
 
 volumes:
   pgdata:
   redisdata:
   miniodata:
+  sandboxwork:
 
 networks:
   edge:
