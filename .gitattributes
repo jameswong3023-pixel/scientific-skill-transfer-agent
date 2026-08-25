@@ -1,0 +1,33 @@
+# Normalize to LF in the repository. The stack builds and runs inside Linux
+# containers: a shell script or entrypoint checked out with CRLF fails there
+# with "bad interpreter: /bin/bash^M", and the failure is confusing because the
+# file looks correct in an editor.
+* text=auto eol=lf
+
+*.sh   text eol=lf
+*.py   text eol=lf
+*.toml text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.md   text eol=lf
+*.ts   text eol=lf
+*.tsx  text eol=lf
+*.css  text eol=lf
+Dockerfile      text eol=lf
+Makefile        text eol=lf
+*.mako          text eol=lf
+.env.example    text eol=lf
+
+# Binary assets: never touch these.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.pdf  binary
+*.zip  binary
+*.nii  binary
+*.gz   binary
+*.dcm  binary
+*.tif  binary
+*.tiff binary
