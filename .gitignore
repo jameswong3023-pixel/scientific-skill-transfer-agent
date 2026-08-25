@@ -93,3 +93,8 @@ data/postgres/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Locally generated phantom. Reproducible byte-for-byte from
+# scripts/make_phantom.py, so the generator is committed and its output is not.
+# true_volumes.json in particular is ground truth and must never be committed.
+fixtures/phantom/

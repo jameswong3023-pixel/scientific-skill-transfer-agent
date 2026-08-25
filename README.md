@@ -12,6 +12,17 @@ runs visually and quantitatively against withheld ground truth.
 Everything below was verified against a running stack. Where a number appears, it was
 measured, not estimated — including the numbers that do not flatter the result.
 
+**On this dataset, the answer it produced is "no".** Across four A/B trials the
+skill-enabled agent never beat the base agent. In the two trials where both arms ran to
+completion, the base agent scored **0.997** and **0.980** mean Dice against withheld ground
+truth *without* the paper — it solves the task unaided, leaving the skill no headroom — and
+in one of those trials the skill arm scored 0.305 because it spent its budget running the
+paper's validation checks instead of writing its deliverable. That is a finding about this
+benchmark being too easy, not a claim that skill transfer does not work; the full reasoning,
+the four trials, and an independent re-verification of the scoring are in
+[Example experiment](#example-experiment). The system was built so that it could return this
+answer, and it did.
+
 ---
 
 ## Table of contents
@@ -819,17 +830,24 @@ found by probing the live API by hand.
 
 ## Example experiment
 
-Produced on 2026-08-25 against `stealth/ox-alpha` through OpenRouter, with the default
-8-iteration budget per arm. Every number below is copied from a real run; nothing here is
-illustrative, and nothing has been selected for looking good.
+Produced on 2026-08-25 against `stealth/ox-alpha` through OpenRouter. Four trials were run:
+two at the original 8-iteration budget, and two more after that budget was diagnosed as too
+small and raised to 16. Every number below is copied from a real run; nothing here is
+illustrative, and nothing has been selected for looking good. The two 8-iteration trials are
+kept exactly as they were run rather than quietly replaced, because *why* they had to be
+rerun is itself part of the result.
 
-> **The honest headline first.** Two trials were run against the same pinned skill and the
-> same dataset. The skill arm won the first by a wide margin and lost the second. Neither
-> result was decided by segmentation quality — both were decided by whether an arm managed
-> to write and register a deliverable before its 8-iteration budget ran out. **At N = 2 this
-> system does not yet answer the core question**, and the reason it does not is a
-> characterised, fixable configuration problem rather than a mystery. Details and both
-> trials below.
+> **The honest headline first.** Across four trials the skill-enabled arm never beat the
+> base arm on segmentation quality. At 8 iterations neither arm could reliably finish, so
+> those trials measured truncation rather than skill transfer. At 16 iterations both arms
+> could finish — and the base agent scored **0.997** and **0.980** mean Dice, essentially
+> solving the task unaided, against the skill arm's 0.995 and 0.305. **The honest reading is
+> that this benchmark saturates.** A frontier model given enough steps builds a competent
+> segmentation pipeline on its own, which leaves the skill no headroom to demonstrate value;
+> and in the fourth trial the skill's own instruction to run the paper's validation checks
+> consumed the budget that shipping the deliverable needed. On this evidence **the answer to
+> the core question is "no measurable benefit, and one measurable harm"** — reported as
+> found. Details and all four trials below.
 
 ### 1. Paper → skill
 
@@ -876,6 +894,15 @@ bias-corrected clustering beats bias-blind clustering on this data by **+0.196 m
 only difference is dividing by the true bias field). That margin is what makes the A/B
 comparison capable of measuring anything.
 
+> **What that test does and does not establish.** Both sides of it run a deliberately naive
+> baseline: a crude `t1 > percentile(60)` brain mask and 1-D k-means with no spatial term.
+> The +0.196 gap proves bias correction matters *to a naive method*, and 0.6031 is therefore
+> a floor, not a ceiling. It is **not** evidence that the phantom is hard for a competent
+> pipeline — and trials 3 and 4 below show it is not. An agent that builds a real brain mask
+> (Otsu → largest connected component → fill holes) and adds a spatial prior reaches 0.997
+> on the same volume. That distance between 0.60 and 0.997 is precisely the headroom the
+> skill needed and did not get.
+
 > The first version of the phantom failed that test. Its bias field was heavily smoothed
 > white noise normalised over the whole cube, so the field's extremes landed on empty
 > background and were nearly constant across the small central white-matter core — one
@@ -893,7 +920,7 @@ than the 950 KB of volumes it emits.
 Uploaded as two files: `t1.nii.gz` with `role=input`, `ground_truth.nii.gz` with
 `role=ground_truth`. Only the first was ever staged into a sandbox.
 
-### 3. A/B experiment — trial 1
+### 3. A/B experiment — trial 1 (8-iteration budget)
 
 Both arms concurrent, 14m20s wall clock.
 
@@ -943,7 +970,7 @@ within a fixed budget**. The skill arm's white-matter Dice of 0.001 is an honest
 even so: it under-segmented white matter almost completely while over-segmenting CSF. A run
 that scores 0.316 is not a solved problem.
 
-### 4. A/B experiment — trial 2
+### 4. A/B experiment — trial 2 (8-iteration budget)
 
 Same pinned `skill_version_id`, same dataset, new experiment. This is what an experiment
 pinning an immutable skill version is *for*: no re-extraction, and the only thing that
@@ -976,42 +1003,140 @@ And the base arm's 0.006 is barely better than nothing: it registered `seg_stage
 intermediate that the name ranking did not recognise as a segmentation but also did not
 reject, and which assigned 1,558,808 mm³ to one class against a true 237,120 mm³.
 
-### What the two trials actually say
+### 5. A/B experiment — trial 3 (16-iteration budget)
 
-| | Trial 1 | Trial 2 |
+Same pinned skill, freshly regenerated dataset (byte-identical ground truth —
+sha256 prefix `848c420f6e8f3be6`, the same value trials 1 and 2 used, which is the
+determinism claim above holding in practice). Both arms concurrent.
+
+| | Base agent | Skill-enabled agent |
 |---|---|---|
-| Base mean Dice | 0.000 (no artifact) | 0.006 (intermediate scored) |
-| Skill mean Dice | 0.316 | 0.000 (no artifact) |
-| Delta | **+0.316** | **−0.006** |
-| Arm that shipped a real segmentation | skill | neither |
+| Status | completed | completed |
+| Agent steps | 15 (of 16) | 16 (budget exhausted) |
+| Code executions | 12 | 14 |
+| Failed executions | 0 | 3 |
+| Runtime | 403 s | 953 s |
+| Total tokens | 169,909 | 441,235 |
+| Scorable prediction | `segmentation.nii.gz` | `segmentation.nii.gz` |
+| **Mean Dice** | **0.9971** | **0.9948** |
 
-Both arms exhausted their 8-iteration budget in **all four runs**. In three of the four, the
-run ended with the agent describing deliverables it had not managed to write and register.
-The variable that dominated both experiments was not "does the agent know the technique" —
-it was "did the agent get to `save_artifact` before the budget ran out".
+Per-class, both arms:
 
-That is a finding about **this configuration**, and it is actionable:
+| Class | Base Dice | Skill Dice |
+|---|---|---|
+| CSF | 0.9993 | 0.9989 |
+| Grey matter | 0.9974 | 0.9954 |
+| White matter | 0.9947 | 0.9902 |
 
-1. **`AGENT_MAX_ITERATIONS=8` was too small for this task on this model.** All four runs hit
-   it. Every one of them spent 4–6 iterations on exploration scripts before writing the real
-   analysis. The default is now **16**, and the shared preamble tells the agent to save a
-   working result early and improve it rather than saving once at the end. Both changes
-   reach both arms identically — they repair the measuring instrument, they do not favour a
-   side, and the trigger for changing them was that *both* arms failed the same way.
-2. **The prompt does not make deliverable registration a terminal obligation.** Both arms
-   treated "write the analysis" as the goal and "register the outputs" as a follow-up step,
-   and the budget ended in between. A `finalize` node that forces one last
-   write-and-register pass — for *both* arms identically — would remove this failure mode
-   without touching the fairness contract.
-3. **Anything outside `/work/{run_id}` is invisible.** Trial 1's base arm had a finished
-   label volume in `/tmp/seg.npy`.
-4. **The result is not yet a measurement.** Two samples with opposite signs is exactly what
-   the [determinism caveat](#experimental-fairness) predicts. The right answer is N trials
-   with a paired test, not a louder claim about one of them.
+**Both arms essentially solved the task.** The base agent's predicted volumes land within
+0.6 % of truth on every class, on data whose labels it never saw:
 
-I would rather ship this stated plainly than ship trial 1 on its own with the delta in bold.
-The infrastructure to answer the question is built, verified end to end, and correct; what
-is missing is enough runs — and a slightly larger budget — for the answer to mean anything.
+| Tissue | Base predicted mm³ | True mm³ | Error |
+|---|---|---|---|
+| CSF | 184,416 | 184,576 | −0.09 % |
+| Grey matter | 236,472 | 237,120 | −0.27 % |
+| White matter | 110,560 | 109,928 | +0.58 % |
+
+It got there without the paper, via `N4 bias correction → histogram-valley brain mask →
+3-component GMM → MRF-ICM with a Potts prior (β = 0.35)` — a *more* elaborate pipeline than
+the paper's BCFCM, arrived at independently and executed without a single failed run. The
+skill arm implemented BCFCM as specified, swept its `w`/`β` neighbourhood parameters, and
+landed 0.0023 lower for 2.4× the runtime and 2.6× the tokens.
+
+<details>
+<summary><b>These scores were re-verified against an independent implementation</b></summary>
+
+A mean Dice of 0.997 is exactly the kind of number that should be distrusted before it is
+published, so it was checked three ways rather than taken from the scorer:
+
+1. **Ground-truth isolation, re-confirmed for these runs.** `ground_truth` appears **0**
+   times across all four runs' `agent_steps` rows and **0** times across their `tool_calls`
+   args and results. Only `t1.nii.gz` was ever staged.
+2. **Independent re-scoring.** A standalone script — which does not import
+   `app.evaluation` — reloaded each prediction and the ground truth straight from object
+   storage and recomputed Hungarian-matched Dice from first principles. It reproduced
+   0.9971, 0.9948 and 0.9802 exactly.
+3. **The apparent conflict with the phantom test was explained, not ignored.** 0.997 sits
+   far above that test's 0.6031, which looked wrong until the test was reread: its baseline
+   is deliberately naive (crude percentile mask, 1-D k-means, no spatial term). The two
+   numbers measure different things and do not contradict each other.
+
+</details>
+
+### 6. A/B experiment — trial 4 (16-iteration budget)
+
+Same configuration again. This is the trial where the skill actively hurt.
+
+| | Base agent | Skill-enabled agent |
+|---|---|---|
+| Status | completed | completed |
+| Agent steps | 16 (budget exhausted) | 16 (budget exhausted) |
+| Code executions | 14 | 15 |
+| Failed executions | 2 | 5 |
+| Runtime | 556 s | 968 s |
+| Total tokens | 211,815 | 299,455 |
+| Scorable prediction | `segmentation.nii.gz` | none — scored on `labels_tmp.npy` |
+| **Mean Dice** | **0.9802** | **0.3052** |
+
+The base arm repeated trial 3's result (CSF 0.9986, GM 0.9808, WM 0.9612). The skill arm
+never wrote `segmentation.nii.gz` at all; the harvester fell back to an intermediate,
+`labels_tmp.npy`, which under-segmented white matter by 88 %.
+
+**Why it failed is the interesting part, and it is not bad luck.** Its 16 steps went to
+`bcfcm.py`, then `ablate.py`, `ablate2.py`, and `reference.py` twice — an ablation harness
+comparing BCFCM variants against a GMM reference. Five of those executions died on
+`NameError`s while it patched variable definitions across successive rewrites (the surviving
+scripts still carry its own `# <-- was missing` comments). It spent the run *validating the
+technique* instead of shipping the deliverable.
+
+That behaviour traces directly to the skill prompt, which instructs the agent to "run its
+validation checks" — the paper's validation checks. On an unbounded budget that is good
+science. On a 16-step budget it competes with the one action that gets scored. **The skill
+made the agent behave more like a researcher and less like a deliverer, and the scoreboard
+punished it for that.**
+
+### What the four trials actually say
+
+| | Trial 1 (b=8) | Trial 2 (b=8) | Trial 3 (b=16) | Trial 4 (b=16) |
+|---|---|---|---|---|
+| Base mean Dice | 0.000 (no artifact) | 0.006 (intermediate) | **0.9971** | **0.9802** |
+| Skill mean Dice | 0.316 | 0.000 (no artifact) | 0.9948 | 0.3052 |
+| Delta (skill − base) | **+0.316** | **−0.006** | **−0.0023** | **−0.6750** |
+| Decided by | truncation | truncation | genuine quality | truncation (skill only) |
+
+**The skill-enabled agent did not outperform the base agent in any trial where both arms
+finished.** Raising the budget fixed the instrument — all four 16-iteration runs produced
+real, scorable segmentations, where three of four 8-iteration runs produced none — and what
+the repaired instrument shows is a **ceiling effect**:
+
+1. **The base agent already solves this task.** 0.997 and 0.980 mean Dice, with volume
+   errors under 0.6 %, reached with no access to the paper. There is almost no headroom
+   above that for any skill to occupy. A benchmark on which the control scores 0.997 cannot
+   measure the treatment.
+2. **The phantom is the wrong difficulty for this model.** It was built to defeat
+   bias-*blind* methods, and it does — the regression test still passes at +0.196. But
+   defeating a naive baseline is not the same as challenging a frontier model with 16 steps
+   and SimpleITK installed. The benchmark needs to get harder (heavier bias, lower SNR,
+   partial-volume effects, or a real clinical volume) before an A/B on it means anything.
+3. **The skill has a real cost, and trial 4 measured it.** Following a specification —
+   implementing it faithfully, sweeping its parameters, running its ablations — consumes
+   budget. When the technique is not needed to succeed, that cost is pure loss. This is a
+   genuine finding about skill transfer, not a bug: **a skill can make an agent worse by
+   directing effort toward rigour the task did not require.**
+4. **N = 4 with an uncontrolled confound is still not a measurement.** Trials 1–2 and 3–4
+   ran under different configurations, so only trials 3 and 4 are comparable to each other,
+   and two samples cannot support a paired test. The honest statement is that no benefit was
+   observed, not that no benefit exists.
+
+What would actually answer the question: a harder dataset where the base agent scores in the
+0.4–0.7 band, a budget large enough that neither arm is ever truncated, a `finalize` node
+that forces one write-and-register pass for both arms identically, and N ≥ 10 paired trials.
+The infrastructure to run all of that is built and verified end to end — the experiment is
+sound; the *benchmark* is what needs to change.
+
+I would rather ship this than ship trial 1's `+0.316` on its own with the delta in bold. The
+system was built to be capable of telling me the skill does not help, and on this dataset
+that is what it told me.
 
 ### Artifacts produced (trial 1)
 
@@ -1130,20 +1255,37 @@ Nothing is hard-coded to MRI or to one paper.
 
 Stated honestly, including the uncomfortable ones.
 
-- **A single A/B pair is one sample, not a proof, and two samples disagreed.** The two
-  trials in [Example experiment](#example-experiment) produced deltas of **+0.316** and
-  **−0.006**. OpenRouter provides no reproducibility guarantee for this model and
-  `temperature=0` is not one either. A rigorous claim needs repeated trials with confidence
-  intervals. This is the single biggest scientific weakness of the current setup.
-- **The iteration budget was the dominant variable in the two recorded trials, and those
-  trials should be read with that in mind.** They ran with `AGENT_MAX_ITERATIONS=8`; all four
-  runs exhausted it and three ended with the agent describing deliverables it had never
-  written, so the comparison largely measured "did this arm reach `save_artifact` in time"
-  rather than "did the skill help". The default is now 16 and agents are told where outputs
-  must be written to survive, but the two trials below are reported **as they were run**,
-  under the old budget, rather than quietly re-run until the graph looked better. The
-  distinction that justified changing it at all: both arms failed in the same way, so this is
-  a broken instrument, not a losing result.
+- **The benchmark saturates, so it cannot currently measure what it was built to measure.**
+  This is the single biggest scientific weakness of the setup. With an adequate budget the
+  *base* agent scores **0.997** and **0.980** mean Dice on the phantom with no access to the
+  paper (trials 3 and 4). There is no headroom left for a skill to demonstrate value. The
+  phantom was designed to defeat bias-*blind* methods and it still does — but defeating a
+  naive baseline is not the same as challenging a frontier model that has 16 steps and
+  SimpleITK. Until the task is hard enough that the base arm lands somewhere in the 0.4–0.7
+  band, a null result here is uninformative about skill transfer in general.
+- **Across four trials the skill arm never beat the base arm, and once it lost badly.**
+  Deltas were **+0.316**, **−0.006**, **−0.0023** and **−0.6750**. Only the first two of
+  those are even attributable to the skill's content; the +0.316 was a truncation artifact
+  and the −0.6750 came from the skill arm spending its budget on the paper's ablation and
+  validation checks instead of writing its deliverable. Reported as found. OpenRouter
+  provides no reproducibility guarantee for this model and `temperature=0` is not one either,
+  so a rigorous claim still needs N ≥ 10 paired trials with confidence intervals.
+- **A skill can cost more than it returns, and this is a real result rather than a bug.**
+  Trial 4's skill arm followed its instruction to run the technique's validation checks,
+  built an ablation harness, lost five executions to `NameError`s while repairing it, and
+  finished with no `segmentation.nii.gz`. Specification-following consumes budget; when the
+  technique is not needed to succeed, that spend is pure loss. The skill card's "run its
+  validation checks" line is the specific text responsible, and it is worth reconsidering
+  for budgeted runs.
+- **The iteration budget dominated the first two recorded trials, and they should be read
+  with that in mind.** They ran with `AGENT_MAX_ITERATIONS=8`; all four of those runs
+  exhausted it and three ended with the agent describing deliverables it had never written,
+  so the comparison measured "did this arm reach `save_artifact` in time" rather than "did
+  the skill help". The default is now 16 and agents are told where outputs must be written to
+  survive. Trials 1 and 2 are kept **as they were run**, under the old budget, rather than
+  quietly deleted once better numbers existed. The distinction that justified changing the
+  budget at all: both arms failed the same way, so it was a broken instrument, not a losing
+  result — and the change did not rescue the skill arm, which is the point.
 - **Nothing forces a final write-and-register pass.** The analysis graph's `summarize` node
   asks for a written summary when the budget is spent, but it does not give the agent one
   last chance to persist its outputs. A `finalize` node that does — identically for both
@@ -1200,21 +1342,24 @@ Stated honestly, including the uncomfortable ones.
   per the brief, and the schema has `users` and `workspaces` ready for it.
 - **Only one prediction artifact per run is scored**, chosen by the ranking described above.
   A run producing several plausible segmentations is scored on one of them.
-- **The system prompt does not tell the agent to keep its outputs inside the workspace.**
+- **Writing outside the workspace still loses the file — now warned against, not prevented.**
   Artifact harvesting sweeps `/work/{run_id}` generously, but an agent that writes to `/tmp`
   — which exists, is writable, and is where `HOME` points — loses that file entirely. This
-  actually happened in trial 1 and is the direct cause of that base arm's 0.000.
-  The fix is one sentence in `SHARED_PREAMBLE`, and it must be added to *both* arms at once
-  or it becomes a fairness confound.
+  happened in trial 1 and caused that base arm's 0.000. `SHARED_PREAMBLE` now says so
+  explicitly, to *both* arms identically (adding it to one only would be a fairness
+  confound), and no run since has lost an output that way. It remains guidance rather than
+  an enforced boundary.
 - **"Produced nothing scorable" and "produced a bad segmentation" both read as Dice 0.0** in
   the headline number. The distinction is preserved in the metric's `value_json` detail
   (`error: no_prediction_artifact`) and in the exported `comparison/metrics.json`, but the
   single top-line figure does not carry it and neither does the comparison table.
 - **`inspect_image`, `read_text` and `save_artifact` are workspace-relative by design**, so
   the agent has no way to inspect or rescue a file it put outside the workspace.
-- **The synthetic phantom is easier than real BrainWeb data.** It is committed as a generator
-  so the demo works offline and deterministically; `scripts/fetch_brainweb.py` pulls the real
-  thing when the network allows, and that is the harder benchmark.
+- **The synthetic phantom is easier than real BrainWeb data — and trials 3 and 4 quantified
+  how much that matters.** The base agent reaches 0.997 on it unaided, which is the ceiling
+  effect described above. It is committed as a generator so the demo works offline and
+  deterministically; `scripts/fetch_brainweb.py` pulls the real thing when the network
+  allows, and that is the harder benchmark the comparison actually needs.
 - **LangGraph checkpoints enable resume, but there is no resume button in the UI yet.** The
   state is there and keyed by run id; the endpoint and the button are not.
 - **`extract_skill_job` swallows its exception** and returns `{ok: False}` after marking the
@@ -1228,13 +1373,20 @@ Stated honestly, including the uncomfortable ones.
 
 ## What I would do with more time
 
-- **Raise the iteration budget and add a forced final write-and-register pass**, then re-run.
-  These are the two changes standing between the current inconclusive result and a
-  measurement, and they are both small. They are listed first because the evidence says so,
-  not because they are the most interesting.
+- **Make the benchmark hard enough to have headroom.** This is now the top priority, because
+  the budget fix already landed and revealed the real blocker: the base agent scores 0.997
+  unaided, so there is nothing for a skill to add. Real BrainWeb data via
+  `scripts/fetch_brainweb.py`, heavier bias fields, lower SNR, and partial-volume effects
+  should put the base arm in the 0.4–0.7 band where a difference can actually show up. It is
+  listed first because the evidence says so, not because it is the most interesting.
+- **Add a forced final write-and-register pass** (a `finalize` node, identical for both arms),
+  so a run can never end holding an unsaved result. Trial 4's skill arm lost on exactly this.
 - **N-trial experiments with confidence intervals** rather than a single A/B pair, with a
   paired statistical test across trials, and a run-level dashboard that separates
   "no deliverable" from "poor deliverable" instead of collapsing both to Dice 0.
+- **Separate "budget spent on the technique" from "budget spent shipping".** Trial 4 showed a
+  skill can lose by being followed too faithfully. Measuring where each arm's steps go —
+  exploration, implementation, validation, delivery — would turn that anecdote into data.
 - **One ephemeral container per execution**, with cgroup limits, a read-only root filesystem
   and a per-run volume — replacing directory separation with kernel-level isolation.
 - **A skill library**: cross-paper reuse, skill composition, and diffing two versions of the
