@@ -24,11 +24,14 @@ async def fake_dispatch(ctx, name, args):
     return f"result of {name}"
 
 
-def test_tools_are_read_only():
+def test_tools_touch_nothing_but_the_record_and_the_viewer():
     names = {t["function"]["name"] for t in CONVERSATION_TOOLS}
     assert names == {
         "get_experiment_summary", "get_skill", "list_artifacts",
         "read_artifact_text", "get_run_steps", "get_metrics",
+        # Not a read, but not a write either: it returns a directive the
+        # frontend applies to its own slice viewers.
+        "show_slice",
     }
     # No mutation, and crucially no code execution from the chat surface.
     assert "run_python" not in names
@@ -99,3 +102,42 @@ async def test_model_error_returns_a_usable_message():
 
     result = await answer("q", [], FakeCtx(), client=Broken(), dispatch=fake_dispatch)
     assert "could not" in result["content"].lower() or "error" in result["content"].lower()
+
+
+async def test_show_slice_returns_a_viewer_directive():
+    """'Show me slice 72' has to move the images, not just describe them."""
+    llm = ScriptedLLM([
+        LLMResponse(
+            content="",
+            tool_calls=[ToolCallRequest(
+                id="1", name="show_slice", arguments={"index": 72, "axis": "coronal"}
+            )],
+            finish_reason="tool_calls",
+            usage=Usage(total_tokens=5),
+        ),
+        LLMResponse(content="That slice cuts through the ventricles.", usage=Usage(total_tokens=5)),
+    ])
+    result = await answer("Show me slice 72.", [], FakeCtx(), client=llm, dispatch=fake_dispatch)
+    # 1-based for the user, 0-based for the viewer.
+    assert result["view"] == {"index": 71, "axis": "coronal"}
+    assert "show_slice" in result["tool_calls_made"]
+
+
+async def test_answers_without_show_slice_carry_no_directive():
+    llm = ScriptedLLM([LLMResponse(content="BCFCM.", usage=Usage(total_tokens=5))])
+    result = await answer("What technique?", [], FakeCtx(), client=llm, dispatch=fake_dispatch)
+    assert result["view"] is None
+
+
+async def test_a_malformed_show_slice_does_not_move_the_viewer():
+    llm = ScriptedLLM([
+        LLMResponse(
+            content="",
+            tool_calls=[ToolCallRequest(id="1", name="show_slice", arguments={"axis": "axial"})],
+            finish_reason="tool_calls",
+            usage=Usage(total_tokens=5),
+        ),
+        LLMResponse(content="Which slice did you mean?", usage=Usage(total_tokens=5)),
+    ])
+    result = await answer("Show me a slice.", [], FakeCtx(), client=llm, dispatch=fake_dispatch)
+    assert result["view"] is None

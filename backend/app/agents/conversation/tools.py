@@ -1,8 +1,12 @@
-"""Read-only tools for the conversational agent.
+"""Tools for the conversational agent.
 
 The chat surface deliberately cannot execute code or write files. It answers
 questions about work that already happened by reading the same rows the UI
 renders, which keeps answers grounded and keeps the attack surface small.
+
+The one non-read tool, `show_slice`, still writes nothing: it returns a viewer
+directive that the frontend applies. That is what stops the chat from being a
+separate product bolted onto the viewer — "show me slice 72" moves the slice.
 """
 
 from __future__ import annotations
@@ -88,7 +92,57 @@ CONVERSATION_TOOLS: list[dict[str, Any]] = [
             "parameters": {"type": "object", "properties": {}},
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "show_slice",
+            "description": (
+                "Move the slice viewers on the comparison page to a specific slice. Call this "
+                "whenever the user asks to see, show, or look at a slice — for example "
+                "'show me slice 72' or 'what does the coronal view look like halfway "
+                "through?'. Both arms and the original input scrub together, so one call "
+                "moves the whole comparison. Slices are numbered from 1 as displayed to the "
+                "user. Then describe in words what is on that slice."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "index": {
+                        "type": "integer",
+                        "description": "1-based slice number as shown under the viewer.",
+                    },
+                    "axis": {
+                        "type": "string",
+                        "enum": ["axial", "coronal", "sagittal"],
+                        "description": "Defaults to the axis already on screen.",
+                    },
+                },
+                "required": ["index"],
+            },
+        },
+    },
 ]
+
+VIEW_AXES = ("axial", "coronal", "sagittal")
+
+
+def parse_view_directive(args: dict) -> dict | None:
+    """Turns a `show_slice` tool call into a viewer directive, or None if unusable.
+
+    The model is asked for the 1-based number the user sees; the viewer indexes
+    from 0. Converting here keeps the off-by-one in one place instead of leaving
+    it split between the prompt and the component.
+    """
+    raw = (args or {}).get("index")
+    try:
+        index = int(raw)
+    except (TypeError, ValueError):
+        return None
+    axis = (args or {}).get("axis")
+    directive: dict[str, object] = {"index": max(0, index - 1)}
+    if axis in VIEW_AXES:
+        directive["axis"] = axis
+    return directive
 
 
 @dataclass
@@ -199,6 +253,17 @@ async def dispatch_conversation_tool(ctx: ConversationContext, name: str, args: 
                 [{"seq": s.seq, "node": s.node, "kind": s.kind, "title": s.title,
                   "payload": s.payload} for s in steps[:200]],
                 indent=2, default=str,
+            )
+
+        if name == "show_slice":
+            directive = parse_view_directive(args)
+            if directive is None:
+                return "show_slice needs an integer `index`."
+            axis = directive.get("axis", "the current axis")
+            return (
+                f"The viewer is now showing {axis} slice {int(directive['index']) + 1}. "
+                "Describe what is visible there; do not call this tool again for the "
+                "same request."
             )
 
         if name == "get_metrics":

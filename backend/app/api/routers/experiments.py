@@ -6,9 +6,20 @@ from fastapi.responses import Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Artifact, Experiment, ExperimentStatus, Metric, Run, SkillVersion
+from app.db.models import (
+    Artifact,
+    Dataset,
+    DatasetFile,
+    Experiment,
+    ExperimentStatus,
+    Metric,
+    Paper,
+    Run,
+    SkillVersion,
+)
 from app.db.session import get_session
 from app.imaging.render import render_mask_overlay_png, render_slice_png, slice_count
+from app.schemas.dataset import DatasetDetailOut, DatasetFileOut
 from app.schemas.experiment import (
     ArtifactOut,
     ComparisonOut,
@@ -80,6 +91,35 @@ async def _load_comparison(session: AsyncSession, experiment_id: uuid.UUID):
     return experiment, list(runs), list(artifacts), list(metrics)
 
 
+async def _dataset_detail(
+    session: AsyncSession, dataset_id: uuid.UUID | None
+) -> DatasetDetailOut | None:
+    """The input dataset, files included, so the comparison can show the original.
+
+    `DatasetFileOut` omits `storage_key`, so this exposes no object-store paths.
+    Ground-truth files are listed here exactly as they already are on the dataset
+    page — that is a reviewer-facing view. The agents never see this payload;
+    their isolation is enforced at sandbox staging, not by hiding rows from the UI.
+    """
+    if dataset_id is None:
+        return None
+    dataset = await session.get(Dataset, dataset_id)
+    if dataset is None:
+        return None
+    files = (
+        await session.execute(
+            select(DatasetFile)
+            .where(DatasetFile.dataset_id == dataset_id)
+            .order_by(DatasetFile.created_at)
+        )
+    ).scalars().all()
+    return DatasetDetailOut(
+        id=dataset.id, name=dataset.name, modality=dataset.modality,
+        description=dataset.description, created_at=dataset.created_at,
+        files=[DatasetFileOut.model_validate(f) for f in files],
+    )
+
+
 @router.get("/experiments/{experiment_id}/comparison", response_model=ComparisonOut)
 async def comparison(experiment_id: uuid.UUID, session: AsyncSession = Depends(get_session)):
     experiment, runs, artifacts, metrics = await _load_comparison(session, experiment_id)
@@ -104,6 +144,7 @@ async def comparison(experiment_id: uuid.UUID, session: AsyncSession = Depends(g
         runs=[RunOut.model_validate(r) for r in runs],
         artifacts=dict(by_run),
         metrics={k: dict(v) if isinstance(v, defaultdict) else v for k, v in shaped.items()},
+        dataset=await _dataset_detail(session, experiment.dataset_id),
     )
 
 
@@ -119,6 +160,9 @@ async def download(experiment_id: uuid.UUID, session: AsyncSession = Depends(get
         await session.get(SkillVersion, experiment.skill_version_id)
         if experiment.skill_version_id
         else None
+    )
+    paper = (
+        await session.get(Paper, experiment.paper_id) if experiment.paper_id else None
     )
 
     # DEVIATION FROM PLAN: the plan keyed this blob on `m.key` alone. Both arms
@@ -136,7 +180,9 @@ async def download(experiment_id: uuid.UUID, session: AsyncSession = Depends(get
             by_arm[arm_of.get(str(m.run_id), "unknown")][m.key] = entry
     metric_blob = {"by_arm": dict(by_arm), "comparison": comparison_metrics}
 
-    layout = build_zip_layout(experiment, runs, by_run, skill_version, metric_blob)
+    layout = build_zip_layout(
+        experiment, runs, by_run, skill_version, metric_blob, paper=paper
+    )
     filename = f"experiment-{experiment_id}.zip"
     return StreamingResponse(
         write_zip(layout, fetch=store.get_bytes),
@@ -179,7 +225,8 @@ async def _artifact_volume(session: AsyncSession, artifact_id: uuid.UUID):
 
 # HEAD registered explicitly so the viewer's X-Slice-Count probe works; see the
 # matching comment in routers/datasets.py.
-@router.api_route("/artifacts/{artifact_id}/slice", methods=["GET", "HEAD"])
+@router.get("/artifacts/{artifact_id}/slice", operation_id="artifact_slice")
+@router.head("/artifacts/{artifact_id}/slice", operation_id="artifact_slice_head")
 async def artifact_slice(
     artifact_id: uuid.UUID,
     axis: str = Query("axial"),

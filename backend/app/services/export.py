@@ -26,7 +26,12 @@ def _arm_subdir(kind: str) -> str:
 
 
 def build_zip_layout(
-    experiment, runs, artifacts_by_run, skill_version, metrics: dict | None = None
+    experiment,
+    runs,
+    artifacts_by_run,
+    skill_version,
+    metrics: dict | None = None,
+    paper=None,
 ) -> dict[str, tuple[str, object]]:
     """Maps archive path -> (source, payload).
 
@@ -48,6 +53,28 @@ def build_zip_layout(
             default=str,
         ).encode(),
     )
+
+    # The source PDF is the provenance root of everything else in the archive:
+    # without it a reader cannot check a quoted parameter against the paper it
+    # was taken from. Normalised to `source.pdf` to match the brief's tree, so
+    # the real upload name is preserved alongside it rather than lost.
+    if paper is not None and getattr(paper, "storage_key", None):
+        layout["paper/source.pdf"] = ("storage", paper.storage_key)
+        layout["paper/paper.json"] = (
+            "inline",
+            json.dumps(
+                {
+                    "id": str(paper.id),
+                    "title": paper.title,
+                    "original_filename": paper.filename,
+                    "page_count": paper.page_count,
+                    "sha256": paper.sha256,
+                    "status": paper.status,
+                },
+                indent=2,
+                default=str,
+            ).encode(),
+        )
 
     if skill_version is not None:
         layout["skill/skill.json"] = (

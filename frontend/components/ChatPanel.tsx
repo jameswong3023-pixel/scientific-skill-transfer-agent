@@ -6,17 +6,26 @@ import { Send } from "lucide-react";
 import { Panel } from "@/components/ui/Panel";
 import { Spinner } from "@/components/ui/Spinner";
 import { api } from "@/lib/api";
-import type { Message } from "@/lib/types";
+import type { Message, ViewDirective } from "@/lib/types";
 
 const SUGGESTIONS = [
   "What technique did you extract from this paper?",
   "Why did the first segmentation fail?",
+  "Show me slice 32.",
   "What parameters came from the paper?",
   "Which parts did you infer rather than extract?",
   "How was grey matter volume calculated?",
 ];
 
-export function ChatPanel({ experimentId }: { experimentId: string }) {
+export function ChatPanel({
+  experimentId,
+  onShowSlice,
+}: {
+  experimentId: string;
+  /** Applied when the agent calls `show_slice`, so an answer about a slice
+   *  moves the images instead of only describing them. */
+  onShowSlice?: (directive: ViewDirective) => void;
+}) {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState("");
@@ -48,6 +57,7 @@ export function ChatPanel({ experimentId }: { experimentId: string }) {
     try {
       const reply = await api.sendMessage(conversationId, text);
       setMessages((prev) => [...prev, reply]);
+      if (reply.tool_calls?.view) onShowSlice?.(reply.tool_calls.view);
     } catch (e) {
       setMessages((prev) => [
         ...prev,
@@ -84,6 +94,15 @@ export function ChatPanel({ experimentId }: { experimentId: string }) {
             className={m.role === "user" ? "ml-8 rounded-lg bg-violet-600/20 p-3" : "mr-8 rounded-lg bg-white/[0.04] p-3"}
           >
             <p className="whitespace-pre-wrap text-sm text-slate-200">{m.content}</p>
+            {m.tool_calls?.view && (
+              <button
+                onClick={() => onShowSlice?.(m.tool_calls.view!)}
+                className="mt-1.5 text-[11px] text-violet-400 hover:text-violet-300"
+              >
+                ▲ moved the viewers to {m.tool_calls.view.axis ?? "this"} slice{" "}
+                {m.tool_calls.view.index + 1} — click to go back
+              </button>
+            )}
             {m.tool_calls?.used && m.tool_calls.used.length > 0 && (
               <p className="mono mt-1.5 text-[11px] text-slate-500">
                 looked up: {m.tool_calls.used.join(", ")}

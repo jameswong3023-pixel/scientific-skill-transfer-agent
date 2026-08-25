@@ -4,7 +4,11 @@ import json
 import logging
 from typing import Any
 
-from app.agents.conversation.tools import CONVERSATION_TOOLS, dispatch_conversation_tool
+from app.agents.conversation.tools import (
+    CONVERSATION_TOOLS,
+    dispatch_conversation_tool,
+    parse_view_directive,
+)
 from app.agents.llm import llm
 
 logger = logging.getLogger(__name__)
@@ -24,7 +28,9 @@ quoted from the paper or inferred.
 - Distinguish clearly between the base agent and the skill-enabled agent.
 - Be concise and specific. Prefer concrete numbers, filenames and error messages over \
 generalities.
-- If the data does not answer the question, say so plainly."""
+- If the data does not answer the question, say so plainly.
+- You also drive the slice viewers on the page. When the user asks to see a slice, call \
+`show_slice` so the images actually move, then say what is on it in words."""
 
 MAX_TOOL_ROUNDS = 5
 
@@ -45,6 +51,12 @@ async def answer(
     messages.append({"role": "user", "content": question})
 
     used: list[str] = []
+    # The last `show_slice` the model asked for, handed back to the frontend so
+    # the answer and the images move together.
+    view: dict[str, Any] | None = None
+
+    def done(content: str) -> dict[str, Any]:
+        return {"content": content, "tool_calls_made": used, "view": view}
 
     for _ in range(max_tool_rounds + 1):
         try:
@@ -53,14 +65,13 @@ async def answer(
             )
         except Exception as exc:
             logger.exception("conversation model call failed")
-            return {
-                "content": f"I could not reach the model to answer that ({type(exc).__name__}). "
-                           f"Please try again.",
-                "tool_calls_made": used,
-            }
+            return done(
+                f"I could not reach the model to answer that ({type(exc).__name__}). "
+                f"Please try again."
+            )
 
         if not response.tool_calls:
-            return {"content": response.content, "tool_calls_made": used}
+            return done(response.content)
 
         if len(used) >= max_tool_rounds:
             messages.append(
@@ -69,10 +80,9 @@ async def answer(
             )
             try:
                 final = await client.chat(messages, temperature=0.2, max_tokens=2000)
-                return {"content": final.content, "tool_calls_made": used}
+                return done(final.content)
             except Exception:
-                return {"content": "I ran out of lookups before I could answer.",
-                        "tool_calls_made": used}
+                return done("I ran out of lookups before I could answer.")
 
         messages.append(
             {
@@ -87,6 +97,8 @@ async def answer(
         )
         for call in response.tool_calls:
             used.append(call.name)
+            if call.name == "show_slice":
+                view = parse_view_directive(call.arguments) or view
             try:
                 observation = await dispatch(ctx, call.name, call.arguments)
             except Exception as exc:
@@ -96,4 +108,4 @@ async def answer(
                  "content": observation}
             )
 
-    return {"content": "I was unable to complete that answer.", "tool_calls_made": used}
+    return done("I was unable to complete that answer.")

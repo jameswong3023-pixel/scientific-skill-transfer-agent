@@ -137,6 +137,8 @@ export interface MetricEntry { value: number | null; detail?: Record<string, unk
 export interface Comparison {
   experiment: Experiment;
   runs: Run[];
+  /** The input dataset with its files, so the comparison can show the original. */
+  dataset: Dataset | null;
   artifacts: Record<string, Artifact[]>;
   metrics: {
     system: Record<string, Record<string, MetricEntry>>;
@@ -157,11 +159,17 @@ export interface RunEvent {
   ts: string;
 }
 
+/** Where the agent asked the slice viewers to move, from a `show_slice` call. */
+export interface ViewDirective {
+  index: number;
+  axis?: "axial" | "coronal" | "sagittal";
+}
+
 export interface Message {
   id: string;
   role: "user" | "assistant" | "system" | "tool";
   content: string;
-  tool_calls: { used?: string[] };
+  tool_calls: { used?: string[]; view?: ViewDirective };
   created_at: string;
 }
 

@@ -91,11 +91,17 @@ async def post_message(
         ),
     )
 
+    # `view` is a viewer directive, not a lookup: it survives on the message so a
+    # reloaded conversation can still put the images back where the answer left them.
+    tool_calls: dict = {"used": result["tool_calls_made"]}
+    if result.get("view"):
+        tool_calls["view"] = result["view"]
+
     reply = Message(
         conversation_id=conversation_id,
         role="assistant",
         content=result["content"],
-        tool_calls={"used": result["tool_calls_made"]},
+        tool_calls=tool_calls,
     )
     session.add(reply)
     await session.flush()

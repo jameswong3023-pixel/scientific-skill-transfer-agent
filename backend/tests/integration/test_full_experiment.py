@@ -12,6 +12,7 @@ of wall clock. It is gated behind an env flag for that reason.
 """
 
 import io
+import json
 import os
 import sys
 import time
@@ -233,3 +234,28 @@ def test_zip_export_is_a_valid_archive(client, experiment_run):
         assert any(n.startswith("skill_agent/") for n in names)
         assert not any("ground_truth" in n.lower() for n in names)
         assert zf.testzip() is None, "archive is corrupt"
+
+        # The brief's artifact tree roots at the paper: without it a reader
+        # cannot check a quoted parameter against its source.
+        assert "paper/source.pdf" in names
+        assert zf.read("paper/source.pdf").startswith(b"%PDF-")
+
+
+def test_comparison_carries_the_original_input(client, experiment_run):
+    """The Results view has to show the input beside each arm's output, and it
+    renders slices by dataset-file id -- so the payload must carry the file."""
+    experiment_id = experiment_run["experiment"]["id"]
+    body = client.get(f"/api/experiments/{experiment_id}/comparison").json()
+
+    dataset = body["dataset"]
+    assert dataset is not None, "comparison cannot show the original without the dataset"
+    inputs = [f for f in dataset["files"] if f["role"] == "input"]
+    assert inputs, "no input file to render as the original"
+
+    # Object-store paths stay server-side.
+    assert "storage_key" not in json.dumps(dataset)
+
+    # And the id it hands the viewer must actually render.
+    head = client.head(f"/api/datasets/files/{inputs[0]['id']}/slice?axis=axial&index=0")
+    assert head.status_code == 200
+    assert int(head.headers["X-Slice-Count"]) > 1, "input volume must be scrubbable"

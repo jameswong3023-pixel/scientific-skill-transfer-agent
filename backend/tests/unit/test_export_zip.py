@@ -27,9 +27,16 @@ def _fixture():
     return experiment, runs, artifacts, skill
 
 
+def _paper():
+    return Obj(id="p1", title="A Modified Fuzzy C-Means Algorithm",
+               filename="ahmed-et-al-2002.pdf", storage_key="papers/p1/source.pdf",
+               sha256="ab" * 32, page_count=9, status="extracted")
+
+
 def test_layout_matches_the_briefs_structure():
-    layout = build_zip_layout(*_fixture(), metrics={"dice_delta": 0.2})
+    layout = build_zip_layout(*_fixture(), metrics={"dice_delta": 0.2}, paper=_paper())
     paths = set(layout)
+    assert "paper/source.pdf" in paths
     assert "skill/skill.json" in paths
     assert "skill/skill.md" in paths
     assert "base_agent/run.json" in paths
@@ -110,3 +117,26 @@ def test_a_multi_chunk_archive_is_still_a_valid_archive():
         assert zf.testzip() is None
         assert set(zf.namelist()) == set(layout)
         assert zf.read("outputs/blob3.bin") == payload
+
+
+def test_the_source_paper_is_streamed_not_inlined():
+    """The PDF is a large object: it must be fetched from storage, not held in
+    the API process alongside the segmentation volumes."""
+    layout = build_zip_layout(*_fixture(), metrics={}, paper=_paper())
+    source, key = layout["paper/source.pdf"]
+    assert source == "storage"
+    assert key == "papers/p1/source.pdf"
+
+
+def test_the_original_upload_name_survives_the_rename_to_source_pdf():
+    layout = build_zip_layout(*_fixture(), metrics={}, paper=_paper())
+    kind, payload = layout["paper/paper.json"]
+    assert kind == "inline"
+    assert b"ahmed-et-al-2002.pdf" in payload
+
+
+def test_an_experiment_without_a_paper_still_exports():
+    """Both arms can run with no skill at all; that archive just has no paper/."""
+    layout = build_zip_layout(*_fixture(), metrics={}, paper=None)
+    assert not any(p.startswith("paper/") for p in layout)
+    assert "comparison/metrics.json" in layout

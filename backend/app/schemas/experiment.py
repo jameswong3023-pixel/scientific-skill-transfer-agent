@@ -4,6 +4,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
+from app.schemas.dataset import DatasetDetailOut
+
 
 class ExperimentCreate(BaseModel):
     dataset_id: uuid.UUID
@@ -56,3 +58,8 @@ class ComparisonOut(BaseModel):
     runs: list[RunOut]
     artifacts: dict[str, list[ArtifactOut]]
     metrics: dict[str, Any]
+    # The brief's Results section asks the comparison to show the *original
+    # input* beside each arm's output. The viewer renders slices by dataset-file
+    # id, so the comparison payload has to carry the input file, not just the
+    # dataset id on the experiment.
+    dataset: DatasetDetailOut | None = None

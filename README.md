@@ -27,6 +27,7 @@ answer, and it did.
 
 ## Table of contents
 
+- [Requirements coverage](#requirements-coverage)
 - [Quick start](#quick-start)
 - [Architecture](#architecture)
 - [Major design decisions](#major-design-decisions)
@@ -48,6 +49,61 @@ answer, and it did.
 - [Known limitations](#known-limitations)
 - [What I would do with more time](#what-i-would-do-with-more-time)
 - [Repository layout](#repository-layout)
+
+---
+
+## Requirements coverage
+
+Where each thing the brief asks for actually lives, so a reviewer can check a claim without
+reading the whole document first. Everything below is implemented; the column that matters
+is the third one.
+
+**Required technology**
+
+| Requirement | Where | Note |
+|---|---|---|
+| OX Alpha via OpenRouter as the gateway | `backend/app/agents/llm.py` | Every model call, all three agents. No direct provider SDK is installed. |
+| LangGraph for core orchestration | `backend/app/agents/*/graph.py` | Two `StateGraph`s with branching and cycles; `AsyncPostgresSaver` checkpointing. The chat loop is deliberately *not* a graph — [why](#3-conversation--backendappagentsconversation). |
+| Python backend | `backend/` | FastAPI, SQLAlchemy 2.0 async, Alembic, arq. |
+| Containerised, reproducible start | `docker-compose.yml` | `docker compose up -d --build`, then `docker compose run --rm seed --wait`. |
+
+**Product workflow**
+
+| # | Requirement | Where |
+|---|---|---|
+| 1 | Upload a paper | `POST /api/papers`, `frontend/components/PaperUpload.tsx` |
+| 2 | Extract a Skill, inspectable with provenance | [Skill extraction](#1-skill-extraction--backendappagentsskill_extraction), `SkillInspector.tsx` — quoted fields carry a clickable page chip, inferred ones are marked |
+| 3 | Provide a dataset, inspected before analysis | `POST /api/datasets/{id}/files`, `inspect_image` tool |
+| 4 | Run analysis in an isolated sandbox | [Sandbox implementation](#sandbox-implementation) — zero-egress network, no secrets, uid 1000 |
+| 5 | A/B experiment, fair by construction | [Experimental fairness](#experimental-fairness) — one prompt module, one divergence point |
+| 6 | Show the agent working | [Progress streaming](#progress-streaming) — SSE, subscribe-then-replay; no raw model reasoning |
+| 7 | Results: original input, both outputs, metrics, artifacts, history | `ComparisonView.tsx` — input volume under each arm's overlay, all three viewers locked to one slice |
+| 8 | Evaluation against withheld ground truth | [Evaluation](#evaluation) — Dice/IoU/precision/recall/volume error + system metrics; labels never staged into a sandbox |
+
+**Frontend**
+
+All eleven capabilities the brief lists are present: upload a paper, view processing status,
+inspect the skill, upload/select data, start the analysis, watch progress, ask questions,
+compare arms, inspect artifacts, visualise imaging output, download results. The
+conversational interface answers each of the brief's example questions from real rows — and
+*"Show me slice 72."* moves the images, via the agent's
+[`show_slice`](#3-conversation--backendappagentsconversation) tool, rather than only
+describing them.
+
+**Deliverables**
+
+| Deliverable | State |
+|---|---|
+| Working application | End-to-end; four real A/B trials recorded in [Example experiment](#example-experiment) |
+| Source code | This repository — [layout](#repository-layout) |
+| Dockerised setup | `docker compose up -d --build`; `scripts/verify_stack.sh` asserts the infrastructure and security claims (27 checks) |
+| README covering the 10 requested topics | Architecture · [design decisions](#major-design-decisions) · [agent design](#agent-design) · [LangGraph](#langgraph-structure) · [OpenRouter](#openrouter-integration) · [data model](#data-model) · [sandbox](#sandbox-implementation) · [how to run](#quick-start) · [limitations](#known-limitations) · [with more time](#what-i-would-do-with-more-time) |
+| Example experiment | [Four complete trials](#example-experiment), including the ones that did not flatter the result |
+
+**The core question.** Answered, with evidence, at the top of this file and in full in
+[What the four trials actually say](#what-the-four-trials-actually-say). The honest answer on
+this dataset is *no* — and the reason is a benchmark ceiling, not a broken pipeline. That
+distinction, and the evidence for it, is the most important thing in this README.
 
 ---
 
@@ -280,6 +336,16 @@ A bounded ReAct-style tool loop (5 rounds, then a forced tool-free answer) over 
 **read-only** tools: `get_experiment_summary`, `get_skill`, `list_artifacts`,
 `read_artifact_text`, `get_run_steps` (with a `only_failures` filter), `get_metrics`. It
 deliberately cannot execute code or write files — it reads exactly the rows the UI renders.
+
+A seventh tool, **`show_slice`**, is what stops the chat being a separate product bolted
+onto the viewer. Asked *"Show me slice 72."* the agent calls it, and the answer arrives with
+a viewer directive that moves the original input and both arms to that slice — then it
+describes what is on it. The tool still writes nothing: it returns a directive the frontend
+applies. The directive is persisted on the message row, so reopening a conversation puts the
+images back where the answer left them, and the model is asked for the **1-based** number
+the user sees while the viewer indexes from 0 — that conversion lives in one function
+(`parse_view_directive`) rather than being split between the prompt and the component.
+A malformed call moves nothing.
 
 It is grounded by instruction *and* by construction: it is told to look a value up before
 quoting it, to read the actual run steps when asked why something failed, and to check the
@@ -617,13 +683,36 @@ which the upload probe records in `dataset_files.file_metadata` and the agent's
 
 Rendering is server-side. `GET /api/artifacts/{id}/slice?axis=axial&index=72&cmap=gray`
 returns a PNG plus an `X-Slice-Count` header, so the client learns the volume's depth from a
-response header and never parses a volume. (The client currently asks for that header with a
-`HEAD` request, which does not work — see [Known limitations](#known-limitations).) Masks
-render as a **separate transparent
-RGBA PNG** through `/overlay?alpha=…`, using a 13-entry colour-blind-safe palette with label
-0 reserved as fully transparent. The UI stacks base and overlay as two absolutely positioned
-images, with axis tabs (axial / coronal / sagittal), a range scrubber, arrow-key navigation,
-an overlay toggle and an alpha slider.
+response header and never parses a volume. The client reads that header with a `HEAD`
+request; both slice routes register `GET` and `HEAD` as separate operations so the probe is
+not a 405 (see [Known limitations](#known-limitations) for how that hid a dead scrubber).
+Masks render as a **separate transparent RGBA PNG** through `/overlay?alpha=…`, using a
+13-entry colour-blind-safe palette with label 0 reserved as fully transparent. The UI stacks
+base and overlay as two absolutely positioned images, with axis tabs (axial / coronal /
+sagittal), a range scrubber, arrow-key navigation, an overlay toggle and an alpha slider.
+
+**The picture has to be the thing that was scored.** Which volume an arm's viewer draws is
+not a guess: `evaluate_experiment` records the artifact it actually read as
+`prediction_artifact` on the `mean_dice` metric, and the comparison view renders that path.
+This was worth making explicit. The skill arm of trial 3 wrote both `brainmask.npy` and
+`segmentation.nii.gz`; a name-contains check matched the brain mask first, and the page drew
+a *binary mask* beside a four-class Dice of **0.9948** — two panels that looked completely
+plausible and disagreed with each other. The frontend now prefers the scored path and only
+falls back to a ranking (which mirrors `rank_prediction_candidates`, negative list included)
+for a run that has no score yet.
+
+**What sits under the overlay matters.** On the comparison page the base layer is the
+**input volume**, not the segmentation — each arm's labels are drawn over the anatomy they
+claim to describe, so a boundary can actually be judged rather than just recoloured.
+Unticking *overlay* gives the before/after view of the same slice. Getting this wrong is
+easy and invisible: an earlier version stacked the segmentation over itself, which renders
+perfectly and shows nothing.
+
+All three viewers — original input, base arm, skill arm — are **controlled by one shared
+`{axis, index}`** held by `ComparisonView`. Comparing two segmentations is only meaningful
+on the same slice, and it gives the conversational agent a single place to point at. The
+`SliceViewer` component stays uncontrolled when those props are absent, which is how the
+dataset page uses it.
 
 ---
 
@@ -678,6 +767,8 @@ Every file the agent registers with `save_artifact` is uploaded to MinIO under
 
 ```
 experiment.json                       # id, task, status, config
+paper/source.pdf                      # the uploaded paper, streamed from object storage
+paper/paper.json                      # title, original upload name, sha256, page count
 skill/skill.json                      # the exact SkillVersion payload that ran
 skill/skill.md                        # the rendered card the skill arm received
 base_agent/run.json                   # status + totals
@@ -688,6 +779,12 @@ skill_agent/generated_code/…
 skill_agent/outputs/…
 comparison/metrics.json               # {by_arm: {base: …, skill: …}, comparison: …}
 ```
+
+The paper is the provenance root of everything else in the archive: without it a reader
+cannot check a quoted parameter against the sentence it came from. It is normalised to
+`source.pdf` to match the brief's tree, so the real upload name is preserved beside it in
+`paper.json` rather than lost. It is streamed from object storage, never inlined — a PDF
+does not belong in the API process's memory next to two segmentation volumes.
 
 The ZIP is streamed in 8 MB chunks through a write-only, non-seekable sink, which makes
 `zipfile` emit data descriptors — the documented way to stream an archive. (Rewinding a
@@ -1141,10 +1238,13 @@ that is what it told me.
 ### Artifacts produced (trial 1)
 
 `GET /api/experiments/{id}/download` returned a valid 1.22 MB archive
-(`zipfile.testzip()` → `None`), verified live:
+(`zipfile.testzip()` → `None`), verified live. The `paper/` entries were added after this
+trial ran and are shown here at the sizes the same endpoint returns today:
 
 ```
 experiment.json                                800
+paper/source.pdf                             4,438
+paper/paper.json                               287
 skill/skill.json                            18,269
 skill/skill.md                              10,181
 base_agent/run.json                          3,314
@@ -1298,9 +1398,12 @@ Stated honestly, including the uncomfortable ones.
   the axis tabs and the alpha slider worked and the failure looked like a volume that
   happened to have a single slice, rather than a rejected request. The rendering endpoints
   were correct throughout: `GET .../slice?axis=coronal&index=32` returned a valid PNG with
-  `X-Slice-Count: 64` on all three axes. The two slice routes now declare
-  `methods=["GET", "HEAD"]`; `HEAD` is the right verb, since the probe wants a header rather
-  than a PNG, and Starlette drops the body. The lasting lesson is that the entire suite was
+  `X-Slice-Count: 64` on all three axes. Both slice routes now register `GET` and `HEAD`
+  as two decorators on the same handler; `HEAD` is the right verb, since the probe wants a
+  header rather than a PNG, and Starlette drops the body. (A single
+  `api_route(methods=["GET", "HEAD"])` also works, but shares one operation id across both
+  methods, which makes the generated OpenAPI schema ambiguous and warns on every boot.)
+  The lasting lesson is that the entire suite was
   green while a headline feature did nothing, because nothing exercised the request method
   the browser actually uses — a contract between two layers that each unit test, in
   isolation, was happy with.

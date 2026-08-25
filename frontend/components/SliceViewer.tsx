@@ -8,39 +8,70 @@ import { useSliceCount } from "@/hooks/useSliceCount";
 const AXES = ["axial", "coronal", "sagittal"] as const;
 export type Axis = (typeof AXES)[number];
 
+/**
+ * Renders one volume, optionally with a label overlay on top.
+ *
+ * Uncontrolled by default (the dataset page shows a single volume on its own).
+ * Pass `axis`/`index`/`onViewChange` to control it from outside: the comparison
+ * page does that so the input and both arms sit on the same slice, and so the
+ * chat's `show_slice` can move all three at once.
+ */
 export function SliceViewer({
   baseUrlFor, overlayUrlFor, title, initialAxis = "axial", compact = false,
+  axis: axisProp, index: indexProp, onViewChange, onCountChange,
 }: {
   baseUrlFor: (axis: Axis, index: number) => string;
   overlayUrlFor?: ((axis: Axis, index: number, alpha: number) => string) | null;
   title?: string;
   initialAxis?: Axis;
   compact?: boolean;
+  axis?: Axis;
+  index?: number;
+  onViewChange?: (next: { axis: Axis; index: number }) => void;
+  onCountChange?: (count: number) => void;
 }) {
-  const [axis, setAxis] = useState<Axis>(initialAxis);
-  const [index, setIndex] = useState(0);
+  const controlled = axisProp !== undefined && indexProp !== undefined;
+  const [ownAxis, setOwnAxis] = useState<Axis>(initialAxis);
+  const [ownIndex, setOwnIndex] = useState(0);
   const [alpha, setAlpha] = useState(0.55);
   const [showOverlay, setShowOverlay] = useState(true);
+
+  const axis = controlled ? (axisProp as Axis) : ownAxis;
+  const index = controlled ? (indexProp as number) : ownIndex;
 
   const probeUrl = useMemo(() => baseUrlFor(axis, 0), [axis, baseUrlFor]);
   const count = useSliceCount(probeUrl);
 
-  // Re-centre when the axis changes: the middle slice is almost always the
-  // informative one, and slice counts differ per axis.
+  const setView = (next: { axis: Axis; index: number }) => {
+    if (controlled) onViewChange?.(next);
+    else {
+      setOwnAxis(next.axis);
+      setOwnIndex(next.index);
+    }
+  };
+
   useEffect(() => {
-    setIndex(Math.floor(count / 2));
-  }, [axis, count]);
+    onCountChange?.(count);
+  }, [count, onCountChange]);
+
+  // Re-centre when the axis changes: the middle slice is almost always the
+  // informative one, and slice counts differ per axis. A controlled viewer
+  // leaves this to its owner, which re-centres every viewer together.
+  useEffect(() => {
+    if (!controlled) setOwnIndex(Math.floor(count / 2));
+  }, [axis, count, controlled]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.key === "ArrowLeft") setIndex((i) => Math.max(0, i - 1));
-      if (e.key === "ArrowRight") setIndex((i) => Math.min(count - 1, i + 1));
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      const delta = e.key === "ArrowLeft" ? -1 : 1;
+      setView({ axis, index: Math.min(count - 1, Math.max(0, index + delta)) });
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [count]);
+  });
 
-  const clamped = Math.min(index, Math.max(0, count - 1));
+  const clamped = Math.min(Math.max(0, index), Math.max(0, count - 1));
 
   return (
     <div className="space-y-3">
@@ -51,7 +82,7 @@ export function SliceViewer({
           {AXES.map((a) => (
             <button
               key={a}
-              onClick={() => setAxis(a)}
+              onClick={() => setView({ axis: a, index })}
               className={clsx(
                 "rounded px-2.5 py-1 text-xs capitalize transition",
                 axis === a
@@ -98,7 +129,7 @@ export function SliceViewer({
           min={0}
           max={Math.max(0, count - 1)}
           value={clamped}
-          onChange={(e) => setIndex(Number(e.target.value))}
+          onChange={(e) => setView({ axis, index: Number(e.target.value) })}
           className="w-full accent-violet-500"
           aria-label="slice index"
         />

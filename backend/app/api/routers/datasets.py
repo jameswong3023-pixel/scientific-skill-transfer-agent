@@ -41,7 +41,11 @@ async def list_datasets(session: AsyncSession = Depends(get_session)):
 # does not synthesise HEAD for a GET-only route -- the probe came back 405, the
 # frontend swallowed it, and the scrubber silently fell back to a single slice.
 # Starlette drops the body for HEAD, so the probe stays cheap.
-@router.api_route("/files/{file_id}/slice", methods=["GET", "HEAD"])
+# Two decorators rather than one `api_route(methods=[...])`: a multi-method
+# route shares a single operation id across its methods, which makes the
+# generated OpenAPI schema ambiguous and warns on every boot.
+@router.get("/files/{file_id}/slice", operation_id="dataset_file_slice")
+@router.head("/files/{file_id}/slice", operation_id="dataset_file_slice_head")
 async def dataset_file_slice(
     file_id: uuid.UUID,
     axis: str = Query("axial"),

@@ -16,6 +16,13 @@ while GET on the same URL returned a correct PNG with `X-Slice-Count: 64`.
 
 The routes now declare HEAD explicitly. HEAD is the right verb here — the probe
 wants a header, not a PNG — and Starlette drops the body, so it stays cheap.
+
+Each path is registered by two stacked decorators (`@router.get` over
+`@router.head`) rather than one `api_route(methods=["GET", "HEAD"])`, because a
+multi-method route shares a single operation id across its methods and makes the
+generated OpenAPI schema ambiguous. So a path can now own more than one route
+object, and the question this file asks — "which methods does this path
+accept?" — is the union across all of them.
 """
 
 import pytest
@@ -29,10 +36,15 @@ SLICE_ROUTES = (
 
 
 def _methods_for(path: str) -> set[str]:
+    methods: set[str] = set()
+    found = False
     for route in app.routes:
         if getattr(route, "path", None) == path:
-            return set(getattr(route, "methods", ()) or ())
-    raise AssertionError(f"route not registered: {path}")
+            found = True
+            methods |= set(getattr(route, "methods", ()) or ())
+    if not found:
+        raise AssertionError(f"route not registered: {path}")
+    return methods
 
 
 def test_the_slice_routes_exist_and_serve_get():
