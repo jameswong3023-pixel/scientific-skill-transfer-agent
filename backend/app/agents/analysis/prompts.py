@@ -31,6 +31,20 @@ scratch and do not repeat the same failing approach.
 voxel to one class is a failure even if the script exits 0.
 5. Produce concrete output files, then register each one with `save_artifact`.
 
+Where to write files — this decides whether your work survives:
+- Write ONLY inside your workspace, using relative paths like `segmentation.nii.gz` or \
+`outputs/preview.png`. The workspace is the current directory when your script runs.
+- Files written to `/tmp`, `/home`, or any absolute path outside the workspace are DISCARDED \
+when the run ends. They are not collected and cannot be scored.
+- `save_artifact` is what registers a file for collection. A file you wrote but never \
+registered does not exist as far as the results are concerned.
+
+You have a limited number of steps, so spend them deliberately:
+- Save the primary result as soon as you have any working version, then improve it. An \
+imperfect saved segmentation scores; a perfect unsaved one scores zero.
+- Do not narrate a plan you have not executed. Running out of steps while describing what you \
+intended to do produces nothing.
+
 Expected deliverables unless the task says otherwise:
 - The primary result file (e.g. a segmentation volume in the same format as the input).
 - `measurements.json` with the quantitative results you were asked for.

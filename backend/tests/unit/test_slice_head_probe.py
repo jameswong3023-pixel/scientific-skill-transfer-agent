@@ -1,26 +1,21 @@
-"""Pins a known, currently-unfixed defect so it cannot be forgotten.
+"""The slice routes must answer the HEAD probe the viewer sends.
 
 `frontend/hooks/useSliceCount.ts` learns a volume's depth by reading the
-`X-Slice-Count` response header, and it asks for it with:
+`X-Slice-Count` response header, and asks for it with:
 
     fetch(url, { method: "HEAD" })
 
-FastAPI 0.115 registers every `@router.get(...)` route with `methods={"GET"}` and
-does **not** synthesise a HEAD handler the way bare Starlette's `Route` does. So
-that probe gets HTTP 405, the hook's `.catch()` swallows it, and the slice count
-silently falls back to 1 — the axis tabs and the opacity slider still work, but
-the scrubber has nothing to scrub. Verified against the running stack: HEAD on
-`/api/artifacts/{id}/slice` returns 405 both directly and through the Next.js
-rewrite, while GET on the same URL returns a correct PNG with
-`X-Slice-Count: 64`.
+FastAPI registers every `@router.get(...)` route with `methods={"GET"}` and does
+not synthesise a HEAD handler the way bare Starlette's `Route` does. When these
+routes were GET-only that probe returned 405, the hook's `.catch()` swallowed
+it, and the slice count silently fell back to 1 — the axis tabs and opacity
+slider still worked, so the failure looked like a volume that happened to have
+one slice rather than a broken request. Verified against the running stack at
+the time: HEAD returned 405 both directly and through the Next.js rewrite,
+while GET on the same URL returned a correct PNG with `X-Slice-Count: 64`.
 
-The test is `xfail(strict=True)` rather than an assertion of the broken
-behaviour: it fails the build the moment someone fixes the mismatch, which is the
-prompt to delete this file and replace it with a real assertion. Fixing it is one
-line on either side of the boundary — `method: "GET"` in the hook, or
-`methods=["GET", "HEAD"]` on the two slice routes — but it touches `frontend/`
-and `backend/app/`, both of which were explicitly out of scope for the change
-that found it.
+The routes now declare HEAD explicitly. HEAD is the right verb here — the probe
+wants a header, not a PNG — and Starlette drops the body, so it stays cheap.
 """
 
 import pytest
@@ -45,14 +40,9 @@ def test_the_slice_routes_exist_and_serve_get():
         assert "GET" in _methods_for(path)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "KNOWN DEFECT: the frontend probes these routes with HEAD to read "
-        "X-Slice-Count, but FastAPI registers them GET-only, so the probe 405s "
-        "and slice navigation silently collapses to a single slice."
-    ),
-)
 @pytest.mark.parametrize("path", SLICE_ROUTES)
 def test_slice_routes_answer_the_head_probe_the_frontend_sends(path):
-    assert "HEAD" in _methods_for(path)
+    assert "HEAD" in _methods_for(path), (
+        f"{path} does not accept HEAD; the viewer's X-Slice-Count probe will 405 "
+        "and slice navigation will silently collapse to a single slice"
+    )

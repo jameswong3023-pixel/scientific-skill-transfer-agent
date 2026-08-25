@@ -8,7 +8,10 @@ def test_settings_reads_env(monkeypatch):
     assert s.openrouter_api_key == "sk-or-v1-test"
     assert s.openrouter_model == "stealth/ox-alpha"
     assert s.openrouter_base_url == "https://openrouter.ai/api/v1"
-    assert s.agent_max_iterations == 8
+    # A budget of 8 was measured to truncate every run mid-task, so the trials
+    # recorded whether an arm ran out of steps rather than how well it
+    # segmented. Both arms always get this same number.
+    assert s.agent_max_iterations == 16
     assert s.agent_temperature == 0.0
 
 

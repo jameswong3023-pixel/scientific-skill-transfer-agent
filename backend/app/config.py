@@ -44,7 +44,13 @@ class Settings(BaseSettings):
     sandbox_memory_mb: int = 3072
 
     # Agent
-    agent_max_iterations: int = 8
+    # Steps each arm may take. Measured: with a budget of 8 all four runs across
+    # two trials exhausted it, and three finished describing deliverables they
+    # had never written -- so the trials measured truncation, not skill
+    # transfer. Raised to give a run room to inspect, implement, debug and save.
+    # Both arms always receive the identical value; this is the measurement
+    # apparatus, not a knob that favours either side.
+    agent_max_iterations: int = 16
     agent_temperature: float = 0.0
     log_level: str = "INFO"
 

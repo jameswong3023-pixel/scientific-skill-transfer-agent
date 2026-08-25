@@ -177,7 +177,9 @@ async def _artifact_volume(session: AsyncSession, artifact_id: uuid.UUID):
         raise HTTPException(status_code=422, detail=f"not a renderable image: {exc}") from exc
 
 
-@router.get("/artifacts/{artifact_id}/slice")
+# HEAD registered explicitly so the viewer's X-Slice-Count probe works; see the
+# matching comment in routers/datasets.py.
+@router.api_route("/artifacts/{artifact_id}/slice", methods=["GET", "HEAD"])
 async def artifact_slice(
     artifact_id: uuid.UUID,
     axis: str = Query("axial"),

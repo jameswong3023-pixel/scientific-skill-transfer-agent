@@ -36,7 +36,12 @@ async def list_datasets(session: AsyncSession = Depends(get_session)):
     ).scalars().all()
 
 
-@router.get("/files/{file_id}/slice")
+# HEAD is registered explicitly. The viewer probes this route with HEAD purely
+# to read X-Slice-Count before deciding how many slices to offer, and FastAPI
+# does not synthesise HEAD for a GET-only route -- the probe came back 405, the
+# frontend swallowed it, and the scrubber silently fell back to a single slice.
+# Starlette drops the body for HEAD, so the probe stays cheap.
+@router.api_route("/files/{file_id}/slice", methods=["GET", "HEAD"])
 async def dataset_file_slice(
     file_id: uuid.UUID,
     axis: str = Query("axial"),
