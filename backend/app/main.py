@@ -6,7 +6,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
 
-from app.api.routers import events, health, papers
+from app.api.routers import (
+    conversations,
+    datasets,
+    events,
+    experiments,
+    health,
+    papers,
+)
 from app.config import settings
 
 logging.basicConfig(level=settings.log_level)
@@ -55,4 +62,7 @@ app.add_middleware(
 
 app.include_router(health.router)
 app.include_router(papers.router)
+app.include_router(datasets.router)
+app.include_router(experiments.router)
+app.include_router(conversations.router)
 app.include_router(events.router)
