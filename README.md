@@ -53,7 +53,17 @@ the [design decisions](docs/design-decisions.md) with their costs, and the full
 
 ## Quick start
 
-You need Docker with Compose v2 and an OpenRouter API key. Nothing else.
+### What you need
+
+Docker with Compose v2, and an OpenRouter API key. Nothing else — no local Python, no Node, no
+database. Building pulls and creates about 6 GB of images, and the stack wants roughly 8 GB of
+RAM to be comfortable, since the sandbox alone is allowed 3 GB. A first build takes 5–10 minutes
+depending on your connection; after that it is cached.
+
+Get a key at <https://openrouter.ai/keys>. The brief states that OX Alpha credits are currently
+free, so this should not cost anything to run.
+
+### Three commands
 
 ```bash
 cp .env.example .env            # then set OPENROUTER_API_KEY
@@ -61,18 +71,69 @@ docker compose up -d --build    # postgres, redis, minio, sandbox, api, worker, 
 docker compose run --rm seed --wait
 ```
 
-Open <http://localhost:3000>.
+`OPENROUTER_API_KEY` is the only value you have to change. Every other setting in
+`.env.example` already points at the compose services and works unmodified — database URLs,
+MinIO credentials, the sandbox address, the agent's iteration budget. `.env` is gitignored and
+must never be committed.
 
-`seed` is a one-shot compose service behind the `tools` profile, so `docker compose up` never
-starts it. It uploads a sample methods paper, extracts the skill, generates and uploads the
-phantom dataset with the correct file roles, launches the A/B experiment, and with `--wait`
-blocks until both arms are scored and prints the result. That takes 15–25 minutes. Drop
-`--wait` to launch it and watch in the browser instead.
+Then open <http://localhost:3000>.
 
-To check the infrastructure and security claims this file makes:
+### What each step does
+
+`docker compose up -d --build` builds five image tags — `api`, `worker` and `seed` come from one
+Dockerfile and share their layers on disk, so the real cost is closer to three — and starts
+seven services. Postgres, Redis, MinIO and the sandbox each have a healthcheck, and `api` waits
+for all four to pass before it starts, so there is no startup race to manage. On boot the API
+runs `alembic upgrade head`, which provisions all 16 tables; there is no separate migration step.
+
+Confirm it came up before seeding:
+
+```bash
+docker compose ps                        # all services running, four of them healthy
+curl http://localhost:8000/api/health    # {"status":"ok","database":true,"redis":true,"storage":true}
+```
+
+`seed` is a one-shot service behind the `tools` profile, so `docker compose up` never starts it.
+It waits for the API, then runs four numbered steps and prints progress for each: uploads a
+paper, extracts the skill (5–8 minutes), generates the phantom dataset and uploads it with the
+correct `input` and `ground_truth` roles, and launches the A/B experiment. With `--wait` it
+blocks until both arms are scored and prints the comparison; both arms run concurrently and take
+9–15 minutes. Drop `--wait` to get a URL immediately and watch it live in the browser instead.
+
+It is safe to re-run. Each invocation creates a fresh paper, dataset and experiment rather than
+mutating the last one, so if it dies partway you can simply run it again. The timeouts are
+adjustable with `--extract-timeout` and `--timeout` if your connection is slow.
+
+To run against a real paper instead of the bundled synthetic one, drop it at
+`fixtures/paper.pdf` before seeding and it will be picked up automatically.
+
+### Ports
+
+| Port | Service | Override in `.env` |
+|---|---|---|
+| 3000 | Frontend — the only one you normally need | `FRONTEND_PORT` |
+| 8000 | API and OpenAPI docs at `/docs` | `API_PORT` |
+| 9000 / 9001 | MinIO and its console (`minioadmin` / `minioadmin`) | `MINIO_PORT`, `MINIO_CONSOLE_PORT` |
+
+Postgres and Redis publish no host port at all. If 8000 is taken, see the Hyper-V note below.
+
+### Checking it works
 
 ```bash
 bash scripts/verify_stack.sh    # 27 checks; must print "27 passed, 0 failed"
+```
+
+That asserts the infrastructure and security claims this file makes against the running stack:
+the sandbox has no route to the internet, holds none of the secrets, runs as uid 1000, and
+cannot write outside its workspace.
+
+### Everyday commands
+
+```bash
+docker compose logs -f api worker      # follow the interesting services
+docker compose down                    # stop, keep the database and object store
+docker compose down -v                 # stop and wipe all data, for a clean slate
+docker compose up -d --build api       # rebuild one service after a code change
 ```
 
 <details>
