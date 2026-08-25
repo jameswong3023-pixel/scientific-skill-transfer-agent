@@ -117,6 +117,32 @@ services:
       sandbox: {condition: service_healthy}
     networks: [core, sandboxnet]
 
+  # One-command demo: paper -> skill -> dataset -> A/B experiment.
+  #
+  #     docker compose run --rm seed --wait
+  #
+  # Behind a profile, so `docker compose up` never starts it. It reuses the
+  # backend image because the script needs numpy/scipy/nibabel to generate the
+  # phantom and httpx to drive the API, and those are already installed there --
+  # which means a reviewer needs Docker and nothing else. The repository is bind
+  # mounted rather than baked in: scripts/ and fixtures/ are developer tooling,
+  # not part of the shipped application image, and the generated phantom has to
+  # land back on the host so it can be re-uploaded without regenerating.
+  seed:
+    profiles: ["tools"]
+    build:
+      context: ./backend
+    environment:
+      SSTA_API: http://api:8000
+      SSTA_UI: http://localhost:${FRONTEND_PORT:-3000}
+    entrypoint: ["python", "/repo/scripts/seed_demo.py"]
+    working_dir: /repo
+    volumes:
+      - .:/repo
+    depends_on:
+      api: {condition: service_started}
+    networks: [core]
+
   frontend:
     build:
       context: ./frontend
