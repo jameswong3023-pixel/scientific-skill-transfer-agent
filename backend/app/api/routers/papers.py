@@ -5,12 +5,13 @@ from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Paper, PaperPage, Skill, SkillVersion
+from app.db.models import Paper, PaperPage, PaperStatus, Skill, SkillVersion
 from app.db.session import get_session
 from app.papers.ingest import PdfParseError
 from app.schemas.paper import PaperOut, SkillDetailOut
 from app.services.papers import UnsupportedUploadError, create_paper
 from app.storage.s3 import store
+from app.worker import enqueue
 
 router = APIRouter(prefix="/api/papers", tags=["papers"])
 
@@ -72,6 +73,19 @@ async def get_page_text(
     if page is None:
         raise HTTPException(status_code=404, detail="page not found")
     return {"page_number": page.page_number, "text": page.text}
+
+
+@router.post("/{paper_id}/extract", status_code=202)
+async def start_extraction(
+    paper_id: uuid.UUID, session: AsyncSession = Depends(get_session)
+) -> dict:
+    paper = await session.get(Paper, paper_id)
+    if paper is None:
+        raise HTTPException(status_code=404, detail="paper not found")
+    if paper.status == PaperStatus.FAILED:
+        raise HTTPException(status_code=409, detail=f"paper is unusable: {paper.error}")
+    job_id = await enqueue("extract_skill_job", str(paper_id))
+    return {"job_id": job_id, "paper_id": str(paper_id), "status": "queued"}
 
 
 @router.get("/{paper_id}/skill", response_model=SkillDetailOut)
