@@ -17,7 +17,10 @@ class Settings(BaseSettings):
 
     # Data stores
     database_url: str = "postgresql+asyncpg://ssta:ssta_dev_password@postgres:5432/ssta"
-    sync_database_url: str = "postgresql://ssta:ssta_dev_password@postgres:5432/ssta"
+    # Alembic runs synchronously. The +psycopg suffix is required: a bare
+    # postgresql:// URL makes SQLAlchemy load the psycopg2 driver, which is not
+    # a dependency of this project -- psycopg 3 is.
+    sync_database_url: str = "postgresql+psycopg://ssta:ssta_dev_password@postgres:5432/ssta"
     redis_url: str = "redis://redis:6379/0"
 
     # Object storage

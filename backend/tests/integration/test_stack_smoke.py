@@ -23,12 +23,21 @@ async def test_database_has_every_domain_table():
         "datasets", "dataset_files", "experiments", "runs", "agent_steps",
         "tool_calls", "artifacts", "metrics", "conversations", "messages",
     }
-    async with engine.connect() as conn:
-        rows = await conn.execute(
-            text("SELECT tablename FROM pg_tables WHERE schemaname='public'")
-        )
-        actual = {r[0] for r in rows}
-    assert expected <= actual, f"missing: {expected - actual}"
+    try:
+        async with engine.connect() as conn:
+            rows = await conn.execute(
+                text("SELECT tablename FROM pg_tables WHERE schemaname='public'")
+            )
+            actual = {r[0] for r in rows}
+        assert expected <= actual, f"missing: {expected - actual}"
+    finally:
+        # pytest-asyncio gives each test its own event loop, but `engine` is a
+        # module-level singleton whose pool outlives this one. A later test that
+        # drives the app through TestClient runs on a different loop, finds those
+        # pooled asyncpg connections bound to a dead loop, and the health check
+        # silently reports database=False. Disposing here keeps the pool from
+        # crossing loop boundaries.
+        await engine.dispose()
 
 
 def test_object_storage_round_trip():
